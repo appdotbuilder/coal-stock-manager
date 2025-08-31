@@ -1,3 +1,6 @@
+import { db } from '../db';
+import { contractorsTable, stockTable, auditLogTable } from '../db/schema';
+import { eq, and, isNull, desc } from 'drizzle-orm';
 import { 
   type CreateContractorInput, 
   type UpdateContractorInput, 
@@ -5,82 +8,161 @@ import {
 } from '../schema';
 
 export async function createContractor(input: CreateContractorInput): Promise<Contractor> {
-  // This is a placeholder declaration! Real code should be implemented here.
-  // The goal of this handler is to create a new contractor record.
-  // It should:
-  // 1. Validate contractor code uniqueness
-  // 2. Insert new contractor into database
-  // 3. Log creation to audit log
-  // 4. Return created contractor data
-  
-  return Promise.resolve({
-    id: 1,
-    name: input.name,
-    code: input.code,
-    contact_person: input.contact_person,
-    contract_number: input.contract_number,
-    default_grade: input.default_grade,
-    is_active: true,
-    created_at: new Date(),
-    updated_at: new Date(),
-    deleted_at: null
-  } as Contractor);
+  try {
+    // Check for duplicate code
+    const existingContractor = await db.select()
+      .from(contractorsTable)
+      .where(eq(contractorsTable.code, input.code))
+      .execute();
+
+    if (existingContractor.length > 0) {
+      throw new Error(`Contractor with code '${input.code}' already exists`);
+    }
+
+    // Insert new contractor
+    const result = await db.insert(contractorsTable)
+      .values({
+        name: input.name,
+        code: input.code,
+        contact_person: input.contact_person,
+        contract_number: input.contract_number,
+        default_grade: input.default_grade
+      })
+      .returning()
+      .execute();
+
+    const contractor = result[0];
+    
+    return contractor;
+  } catch (error) {
+    console.error('Contractor creation failed:', error);
+    throw error;
+  }
 }
 
 export async function getContractors(): Promise<Contractor[]> {
-  // This is a placeholder declaration! Real code should be implemented here.
-  // The goal of this handler is to fetch all active contractors.
-  // It should:
-  // 1. Query contractors table excluding soft-deleted records
-  // 2. Order by name or creation date
-  // 3. Return contractor list
-  
-  return Promise.resolve([]);
+  try {
+    const contractors = await db.select()
+      .from(contractorsTable)
+      .where(isNull(contractorsTable.deleted_at))
+      .orderBy(desc(contractorsTable.created_at))
+      .execute();
+
+    return contractors;
+  } catch (error) {
+    console.error('Failed to fetch contractors:', error);
+    throw error;
+  }
 }
 
 export async function getContractorById(id: number): Promise<Contractor | null> {
-  // This is a placeholder declaration! Real code should be implemented here.
-  // The goal of this handler is to fetch a specific contractor by ID.
-  // It should:
-  // 1. Query contractor by ID
-  // 2. Check if contractor exists and is not soft-deleted
-  // 3. Return contractor data or null
-  
-  return Promise.resolve(null);
+  try {
+    const contractors = await db.select()
+      .from(contractorsTable)
+      .where(
+        and(
+          eq(contractorsTable.id, id),
+          isNull(contractorsTable.deleted_at)
+        )
+      )
+      .execute();
+
+    return contractors.length > 0 ? contractors[0] : null;
+  } catch (error) {
+    console.error('Failed to fetch contractor by ID:', error);
+    throw error;
+  }
 }
 
 export async function updateContractor(input: UpdateContractorInput): Promise<Contractor> {
-  // This is a placeholder declaration! Real code should be implemented here.
-  // The goal of this handler is to update contractor information.
-  // It should:
-  // 1. Validate contractor exists and is not deleted
-  // 2. Update contractor fields in database
-  // 3. Log changes to audit log
-  // 4. Return updated contractor data
-  
-  return Promise.resolve({
-    id: input.id,
-    name: input.name || 'Updated Name',
-    code: input.code || 'UPD',
-    contact_person: input.contact_person || 'Contact Person',
-    contract_number: input.contract_number || null,
-    default_grade: input.default_grade || 'medium',
-    is_active: input.is_active ?? true,
-    created_at: new Date(),
-    updated_at: new Date(),
-    deleted_at: null
-  } as Contractor);
+  try {
+    // Check if contractor exists and is not deleted
+    const existingContractor = await getContractorById(input.id);
+    if (!existingContractor) {
+      throw new Error('Contractor not found or has been deleted');
+    }
+
+    // Check for duplicate code if code is being updated
+    if (input.code && input.code !== existingContractor.code) {
+      const duplicateCodeCheck = await db.select()
+        .from(contractorsTable)
+        .where(eq(contractorsTable.code, input.code))
+        .execute();
+
+      if (duplicateCodeCheck.length > 0) {
+        throw new Error(`Contractor with code '${input.code}' already exists`);
+      }
+    }
+
+    // Build update object with only provided fields
+    const updateData: any = {
+      updated_at: new Date()
+    };
+
+    if (input.name !== undefined) updateData.name = input.name;
+    if (input.code !== undefined) updateData.code = input.code;
+    if (input.contact_person !== undefined) updateData.contact_person = input.contact_person;
+    if (input.contract_number !== undefined) updateData.contract_number = input.contract_number;
+    if (input.default_grade !== undefined) updateData.default_grade = input.default_grade;
+    if (input.is_active !== undefined) updateData.is_active = input.is_active;
+
+    // Update contractor
+    const result = await db.update(contractorsTable)
+      .set(updateData)
+      .where(eq(contractorsTable.id, input.id))
+      .returning()
+      .execute();
+
+    return result[0];
+  } catch (error) {
+    console.error('Contractor update failed:', error);
+    throw error;
+  }
 }
 
 export async function deleteContractor(id: number, deletedBy: number): Promise<boolean> {
-  // This is a placeholder declaration! Real code should be implemented here.
-  // The goal of this handler is to soft-delete a contractor.
-  // It should:
-  // 1. Validate contractor exists and is not already deleted
-  // 2. Check if contractor has active stock or pending operations
-  // 3. Set deleted_at timestamp (soft delete)
-  // 4. Log deletion to audit log
-  // 5. Return success status
-  
-  return Promise.resolve(true);
+  try {
+    // Check if contractor exists and is not already deleted
+    const existingContractor = await getContractorById(id);
+    if (!existingContractor) {
+      throw new Error('Contractor not found or already deleted');
+    }
+
+    // Check if contractor has active stock
+    const activeStock = await db.select()
+      .from(stockTable)
+      .where(eq(stockTable.contractor_id, id))
+      .execute();
+
+    const hasActiveStock = activeStock.some(stock => parseFloat(stock.tonnage) > 0);
+    if (hasActiveStock) {
+      throw new Error('Cannot delete contractor with active stock');
+    }
+
+    // Soft delete contractor
+    await db.update(contractorsTable)
+      .set({ 
+        deleted_at: new Date(),
+        updated_at: new Date()
+      })
+      .where(eq(contractorsTable.id, id))
+      .execute();
+
+    // Log deletion to audit log
+    await db.insert(auditLogTable)
+      .values({
+        user_id: deletedBy,
+        action: 'DELETE',
+        table_name: 'contractors',
+        record_id: id,
+        old_values: existingContractor,
+        new_values: null
+      })
+      .execute();
+
+    return true;
+  } catch (error) {
+    console.error('Contractor deletion failed:', error);
+    throw error;
+  }
 }

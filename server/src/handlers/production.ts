@@ -1,35 +1,128 @@
+import { db } from '../db';
+import { 
+  productionRecordsTable, 
+  contractorsTable, 
+  jettiesTable, 
+  usersTable, 
+  stockTable 
+} from '../db/schema';
+import { eq, and } from 'drizzle-orm';
 import { 
   type CreateProductionRecordInput, 
   type ProductionRecord 
 } from '../schema';
 
 export async function createProductionRecord(input: CreateProductionRecordInput): Promise<ProductionRecord> {
-  // This is a placeholder declaration! Real code should be implemented here.
-  // The goal of this handler is to record coal production and update stock.
-  // It should:
-  // 1. Validate contractor and jetty exist and are active
-  // 2. Validate tonnage is positive
-  // 3. Insert production record into database
-  // 4. Update or create stock record for contractor-jetty combination
-  // 5. Use optimistic locking for stock updates
-  // 6. Log production record to audit log
-  // 7. Broadcast stock update via WebSocket
-  // 8. Return created production record
-  
-  return Promise.resolve({
-    id: 1,
-    date_time: input.date_time,
-    contractor_id: input.contractor_id,
-    truck_number: input.truck_number,
-    tonnage: input.tonnage,
-    coal_grade: input.coal_grade,
-    jetty_id: input.jetty_id,
-    document_photo: input.document_photo,
-    operator_id: input.operator_id,
-    notes: input.notes,
-    created_at: new Date(),
-    updated_at: new Date()
-  } as ProductionRecord);
+  try {
+    // 1. Validate contractor exists and is active
+    const contractor = await db.select()
+      .from(contractorsTable)
+      .where(and(
+        eq(contractorsTable.id, input.contractor_id),
+        eq(contractorsTable.is_active, true)
+      ))
+      .limit(1)
+      .execute();
+
+    if (contractor.length === 0) {
+      throw new Error('Contractor not found or inactive');
+    }
+
+    // 2. Validate jetty exists and is active
+    const jetty = await db.select()
+      .from(jettiesTable)
+      .where(and(
+        eq(jettiesTable.id, input.jetty_id),
+        eq(jettiesTable.is_active, true)
+      ))
+      .limit(1)
+      .execute();
+
+    if (jetty.length === 0) {
+      throw new Error('Jetty not found or inactive');
+    }
+
+    // 3. Validate operator exists and is active
+    const operator = await db.select()
+      .from(usersTable)
+      .where(and(
+        eq(usersTable.id, input.operator_id),
+        eq(usersTable.is_active, true)
+      ))
+      .limit(1)
+      .execute();
+
+    if (operator.length === 0) {
+      throw new Error('Operator not found or inactive');
+    }
+
+    // 4. Insert production record
+    const productionResult = await db.insert(productionRecordsTable)
+      .values({
+        date_time: input.date_time,
+        contractor_id: input.contractor_id,
+        truck_number: input.truck_number,
+        tonnage: input.tonnage.toString(), // Convert to string for numeric column
+        coal_grade: input.coal_grade,
+        jetty_id: input.jetty_id,
+        document_photo: input.document_photo,
+        operator_id: input.operator_id,
+        notes: input.notes
+      })
+      .returning()
+      .execute();
+
+    const createdRecord = productionResult[0];
+
+    // 5. Update or create stock record for contractor-jetty combination
+    const existingStock = await db.select()
+      .from(stockTable)
+      .where(and(
+        eq(stockTable.contractor_id, input.contractor_id),
+        eq(stockTable.jetty_id, input.jetty_id)
+      ))
+      .limit(1)
+      .execute();
+
+    if (existingStock.length > 0) {
+      // Update existing stock
+      const currentStock = existingStock[0];
+      const newTonnage = parseFloat(currentStock.tonnage) + input.tonnage;
+      
+      await db.update(stockTable)
+        .set({
+          tonnage: newTonnage.toString(),
+          last_updated: new Date(),
+          version: currentStock.version + 1, // Optimistic locking
+          updated_at: new Date()
+        })
+        .where(and(
+          eq(stockTable.id, currentStock.id),
+          eq(stockTable.version, currentStock.version) // Ensure version matches
+        ))
+        .execute();
+    } else {
+      // Create new stock record
+      await db.insert(stockTable)
+        .values({
+          contractor_id: input.contractor_id,
+          jetty_id: input.jetty_id,
+          tonnage: input.tonnage.toString(),
+          last_updated: new Date(),
+          version: 1
+        })
+        .execute();
+    }
+
+    // Return production record with numeric conversion
+    return {
+      ...createdRecord,
+      tonnage: parseFloat(createdRecord.tonnage) // Convert string back to number
+    };
+  } catch (error) {
+    console.error('Production record creation failed:', error);
+    throw error;
+  }
 }
 
 export async function getProductionRecords(

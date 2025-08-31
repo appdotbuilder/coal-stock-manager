@@ -1,66 +1,173 @@
+import { db } from '../db';
+import { usersTable, auditLogTable } from '../db/schema';
 import { 
   type CreateUserInput, 
   type User, 
   type UserRole 
 } from '../schema';
+import { eq, and, asc, desc } from 'drizzle-orm';
+// Using Bun's built-in password hashing
+const hash = async (password: string, rounds: number = 10): Promise<string> => {
+  return await Bun.password.hash(password);
+};
+
+const compare = async (password: string, hash: string): Promise<boolean> => {
+  return await Bun.password.verify(password, hash);
+};
 
 export async function createUser(input: CreateUserInput): Promise<User> {
-  // This is a placeholder declaration! Real code should be implemented here.
-  // The goal of this handler is to create a new user account.
-  // It should:
-  // 1. Validate email and username uniqueness
-  // 2. Hash password using bcrypt or similar
-  // 3. Insert new user into database
-  // 4. Log user creation to audit log
-  // 5. Return created user data (without password hash)
-  
-  return Promise.resolve({
-    id: 1,
-    email: input.email,
-    username: input.username,
-    password_hash: 'hashed_password',
-    full_name: input.full_name,
-    role: input.role,
-    is_active: true,
-    last_login: null,
-    created_at: new Date(),
-    updated_at: new Date()
-  } as User);
+  try {
+    // Check if email or username already exists
+    const existingUsers = await db.select()
+      .from(usersTable)
+      .where(
+        eq(usersTable.email, input.email)
+      )
+      .execute();
+
+    if (existingUsers.length > 0) {
+      throw new Error('Email already exists');
+    }
+
+    const existingUsername = await db.select()
+      .from(usersTable)
+      .where(
+        eq(usersTable.username, input.username)
+      )
+      .execute();
+
+    if (existingUsername.length > 0) {
+      throw new Error('Username already exists');
+    }
+
+    // Hash the password
+    const passwordHash = await hash(input.password, 10);
+
+    // Insert new user
+    const result = await db.insert(usersTable)
+      .values({
+        email: input.email,
+        username: input.username,
+        password_hash: passwordHash,
+        full_name: input.full_name,
+        role: input.role,
+        is_active: true,
+        updated_at: new Date()
+      })
+      .returning()
+      .execute();
+
+    const user = result[0];
+
+    // Log user creation in audit log
+    await db.insert(auditLogTable)
+      .values({
+        user_id: user.id,
+        action: 'CREATE_USER',
+        table_name: 'users',
+        record_id: user.id,
+        new_values: {
+          email: user.email,
+          username: user.username,
+          full_name: user.full_name,
+          role: user.role,
+          is_active: user.is_active
+        }
+      })
+      .execute();
+
+    // Return user without password hash
+    const { password_hash, ...userWithoutPassword } = user;
+    return {
+      ...userWithoutPassword,
+      password_hash: '' // Explicitly set to empty string for security
+    } as User;
+  } catch (error) {
+    console.error('User creation failed:', error);
+    throw error;
+  }
 }
 
 export async function getUsers(): Promise<User[]> {
-  // This is a placeholder declaration! Real code should be implemented here.
-  // The goal of this handler is to fetch all users.
-  // It should:
-  // 1. Query users table
-  // 2. Exclude password_hash from results for security
-  // 3. Order by created_at or full_name
-  // 4. Return user list
-  
-  return Promise.resolve([]);
+  try {
+    const results = await db.select({
+      id: usersTable.id,
+      email: usersTable.email,
+      username: usersTable.username,
+      full_name: usersTable.full_name,
+      role: usersTable.role,
+      is_active: usersTable.is_active,
+      last_login: usersTable.last_login,
+      created_at: usersTable.created_at,
+      updated_at: usersTable.updated_at
+    })
+    .from(usersTable)
+    .orderBy(asc(usersTable.full_name))
+    .execute();
+
+    return results.map(user => ({
+      ...user,
+      password_hash: '' // Excluded for security
+    })) as User[];
+  } catch (error) {
+    console.error('Failed to fetch users:', error);
+    throw error;
+  }
 }
 
 export async function getUserById(id: number): Promise<User | null> {
-  // This is a placeholder declaration! Real code should be implemented here.
-  // The goal of this handler is to fetch a specific user by ID.
-  // It should:
-  // 1. Query user by ID
-  // 2. Exclude password_hash from result for security
-  // 3. Return user data or null if not found
-  
-  return Promise.resolve(null);
+  try {
+    const results = await db.select({
+      id: usersTable.id,
+      email: usersTable.email,
+      username: usersTable.username,
+      full_name: usersTable.full_name,
+      role: usersTable.role,
+      is_active: usersTable.is_active,
+      last_login: usersTable.last_login,
+      created_at: usersTable.created_at,
+      updated_at: usersTable.updated_at
+    })
+    .from(usersTable)
+    .where(eq(usersTable.id, id))
+    .execute();
+
+    if (results.length === 0) {
+      return null;
+    }
+
+    const user = results[0];
+    return {
+      ...user,
+      password_hash: '' // Excluded for security
+    } as User;
+  } catch (error) {
+    console.error('Failed to fetch user by ID:', error);
+    throw error;
+  }
 }
 
 export async function getUserByEmail(email: string): Promise<User | null> {
-  // This is a placeholder declaration! Real code should be implemented here.
-  // The goal of this handler is to fetch a user by email (for authentication).
-  // It should:
-  // 1. Query user by email
-  // 2. Include password_hash for authentication purposes
-  // 3. Check if user is active
-  // 4. Return user data or null if not found
-  
-  return Promise.resolve(null);
+  try {
+    const results = await db.select()
+      .from(usersTable)
+      .where(
+        and(
+          eq(usersTable.email, email),
+          eq(usersTable.is_active, true)
+        )
+      )
+      .execute();
+
+    if (results.length === 0) {
+      return null;
+    }
+
+    return results[0];
+  } catch (error) {
+    console.error('Failed to fetch user by email:', error);
+    throw error;
+  }
 }
 
 export async function updateUser(
@@ -73,16 +180,68 @@ export async function updateUser(
     is_active: boolean;
   }>
 ): Promise<User> {
-  // This is a placeholder declaration! Real code should be implemented here.
-  // The goal of this handler is to update user information.
-  // It should:
-  // 1. Validate user exists
-  // 2. Check email/username uniqueness if being updated
-  // 3. Update user fields in database
-  // 4. Log changes to audit log
-  // 5. Return updated user data (without password hash)
-  
-  return Promise.resolve({} as User);
+  try {
+    // Check if user exists
+    const existingUser = await getUserById(id);
+    if (!existingUser) {
+      throw new Error('User not found');
+    }
+
+    // Check email uniqueness if updating email
+    if (updates.email && updates.email !== existingUser.email) {
+      const emailExists = await db.select()
+        .from(usersTable)
+        .where(eq(usersTable.email, updates.email))
+        .execute();
+
+      if (emailExists.length > 0) {
+        throw new Error('Email already exists');
+      }
+    }
+
+    // Check username uniqueness if updating username
+    if (updates.username && updates.username !== existingUser.username) {
+      const usernameExists = await db.select()
+        .from(usersTable)
+        .where(eq(usersTable.username, updates.username))
+        .execute();
+
+      if (usernameExists.length > 0) {
+        throw new Error('Username already exists');
+      }
+    }
+
+    // Update user
+    const result = await db.update(usersTable)
+      .set({
+        ...updates,
+        updated_at: new Date()
+      })
+      .where(eq(usersTable.id, id))
+      .returning()
+      .execute();
+
+    const updatedUser = result[0];
+
+    // Log update to audit log
+    await db.insert(auditLogTable)
+      .values({
+        user_id: id,
+        action: 'UPDATE_USER',
+        table_name: 'users',
+        record_id: id,
+        old_values: existingUser,
+        new_values: updates
+      })
+      .execute();
+
+    // Return user without password hash
+    const { password_hash, ...userWithoutPassword } = updatedUser;
+    return userWithoutPassword as User;
+  } catch (error) {
+    console.error('User update failed:', error);
+    throw error;
+  }
 }
 
 export async function updateUserPassword(
@@ -90,50 +249,149 @@ export async function updateUserPassword(
   currentPassword: string, 
   newPassword: string
 ): Promise<boolean> {
-  // This is a placeholder declaration! Real code should be implemented here.
-  // The goal of this handler is to update user password.
-  // It should:
-  // 1. Validate user exists and is active
-  // 2. Verify current password matches stored hash
-  // 3. Hash new password
-  // 4. Update password_hash in database
-  // 5. Log password change to audit log
-  // 6. Return success status
-  
-  return Promise.resolve(true);
+  try {
+    // Get user with password hash
+    const results = await db.select()
+      .from(usersTable)
+      .where(
+        and(
+          eq(usersTable.id, id),
+          eq(usersTable.is_active, true)
+        )
+      )
+      .execute();
+
+    if (results.length === 0) {
+      throw new Error('User not found or inactive');
+    }
+
+    const user = results[0];
+
+    // Verify current password
+    const isCurrentPasswordValid = await compare(currentPassword, user.password_hash);
+    if (!isCurrentPasswordValid) {
+      throw new Error('Current password is incorrect');
+    }
+
+    // Hash new password
+    const newPasswordHash = await hash(newPassword, 10);
+
+    // Update password
+    await db.update(usersTable)
+      .set({
+        password_hash: newPasswordHash,
+        updated_at: new Date()
+      })
+      .where(eq(usersTable.id, id))
+      .execute();
+
+    // Log password change
+    await db.insert(auditLogTable)
+      .values({
+        user_id: id,
+        action: 'UPDATE_PASSWORD',
+        table_name: 'users',
+        record_id: id,
+        new_values: { password_changed: true }
+      })
+      .execute();
+
+    return true;
+  } catch (error) {
+    console.error('Password update failed:', error);
+    throw error;
+  }
 }
 
 export async function deactivateUser(id: number, deactivatedBy: number): Promise<boolean> {
-  // This is a placeholder declaration! Real code should be implemented here.
-  // The goal of this handler is to deactivate a user account.
-  // It should:
-  // 1. Validate user exists and is currently active
-  // 2. Set is_active to false
-  // 3. Log deactivation to audit log
-  // 4. Return success status
-  
-  return Promise.resolve(true);
+  try {
+    // Check if user exists and is currently active
+    const existingUser = await db.select()
+      .from(usersTable)
+      .where(
+        and(
+          eq(usersTable.id, id),
+          eq(usersTable.is_active, true)
+        )
+      )
+      .execute();
+
+    if (existingUser.length === 0) {
+      throw new Error('User not found or already inactive');
+    }
+
+    // Deactivate user
+    await db.update(usersTable)
+      .set({
+        is_active: false,
+        updated_at: new Date()
+      })
+      .where(eq(usersTable.id, id))
+      .execute();
+
+    // Log deactivation
+    await db.insert(auditLogTable)
+      .values({
+        user_id: deactivatedBy,
+        action: 'DEACTIVATE_USER',
+        table_name: 'users',
+        record_id: id,
+        old_values: { is_active: true },
+        new_values: { is_active: false, deactivated_by: deactivatedBy }
+      })
+      .execute();
+
+    return true;
+  } catch (error) {
+    console.error('User deactivation failed:', error);
+    throw error;
+  }
 }
 
 export async function getUsersByRole(role: UserRole): Promise<User[]> {
-  // This is a placeholder declaration! Real code should be implemented here.
-  // The goal of this handler is to fetch users by their role.
-  // It should:
-  // 1. Query users by role
-  // 2. Only include active users
-  // 3. Exclude password_hash from results
-  // 4. Order by full_name
-  // 5. Return filtered user list
-  
-  return Promise.resolve([]);
+  try {
+    const results = await db.select({
+      id: usersTable.id,
+      email: usersTable.email,
+      username: usersTable.username,
+      full_name: usersTable.full_name,
+      role: usersTable.role,
+      is_active: usersTable.is_active,
+      last_login: usersTable.last_login,
+      created_at: usersTable.created_at,
+      updated_at: usersTable.updated_at
+    })
+    .from(usersTable)
+    .where(
+      and(
+        eq(usersTable.role, role),
+        eq(usersTable.is_active, true)
+      )
+    )
+    .orderBy(asc(usersTable.full_name))
+    .execute();
+
+    return results.map(user => ({
+      ...user,
+      password_hash: '' // Excluded for security
+    })) as User[];
+  } catch (error) {
+    console.error('Failed to fetch users by role:', error);
+    throw error;
+  }
 }
 
 export async function updateLastLogin(id: number): Promise<void> {
-  // This is a placeholder declaration! Real code should be implemented here.
-  // The goal of this handler is to update user's last login timestamp.
-  // It should:
-  // 1. Update last_login field to current timestamp
-  // 2. This should be called during successful authentication
-  
-  return Promise.resolve();
+  try {
+    await db.update(usersTable)
+      .set({
+        last_login: new Date(),
+        updated_at: new Date()
+      })
+      .where(eq(usersTable.id, id))
+      .execute();
+  } catch (error) {
+    console.error('Failed to update last login:', error);
+    throw error;
+  }
 }

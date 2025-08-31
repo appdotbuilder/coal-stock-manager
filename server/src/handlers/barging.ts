@@ -1,36 +1,138 @@
+import { db } from '../db';
+import { 
+  bargingRecordsTable,
+  contractorsTable,
+  jettiesTable,
+  usersTable,
+  stockTable
+} from '../db/schema';
 import { 
   type CreateBargingRecordInput, 
   type BargingRecord 
 } from '../schema';
+import { eq, and, sql } from 'drizzle-orm';
 
 export async function createBargingRecord(input: CreateBargingRecordInput): Promise<BargingRecord> {
-  // This is a placeholder declaration! Real code should be implemented here.
-  // The goal of this handler is to record coal barging/shipment and reduce stock.
-  // It should:
-  // 1. Validate contractor and jetty exist and are active
-  // 2. Check sufficient stock exists for contractor at specified jetty
-  // 3. Validate tonnage is positive and <= available stock
-  // 4. Use optimistic locking to prevent race conditions
-  // 5. Insert barging record into database
-  // 6. Reduce stock for contractor-jetty combination
-  // 7. Log barging record to audit log
-  // 8. Broadcast stock update via WebSocket
-  // 9. Return created barging record
-  
-  return Promise.resolve({
-    id: 1,
-    date_time: input.date_time,
-    contractor_id: input.contractor_id,
-    ship_batch_number: input.ship_batch_number,
-    tonnage: input.tonnage,
-    jetty_id: input.jetty_id,
-    buyer: input.buyer,
-    loading_document: input.loading_document,
-    operator_id: input.operator_id,
-    notes: input.notes,
-    created_at: new Date(),
-    updated_at: new Date()
-  } as BargingRecord);
+  try {
+    return await db.transaction(async (tx) => {
+      // 1. Validate contractor exists and is active
+      const contractor = await tx.select()
+        .from(contractorsTable)
+        .where(eq(contractorsTable.id, input.contractor_id))
+        .execute();
+
+      if (contractor.length === 0) {
+        throw new Error(`Contractor with ID ${input.contractor_id} not found`);
+      }
+
+      if (!contractor[0].is_active) {
+        throw new Error(`Contractor with ID ${input.contractor_id} is inactive`);
+      }
+
+      // 2. Validate jetty exists and is active
+      const jetty = await tx.select()
+        .from(jettiesTable)
+        .where(eq(jettiesTable.id, input.jetty_id))
+        .execute();
+
+      if (jetty.length === 0) {
+        throw new Error(`Jetty with ID ${input.jetty_id} not found`);
+      }
+
+      if (!jetty[0].is_active) {
+        throw new Error(`Jetty with ID ${input.jetty_id} is inactive`);
+      }
+
+      // 3. Validate operator exists and is active
+      const operator = await tx.select()
+        .from(usersTable)
+        .where(eq(usersTable.id, input.operator_id))
+        .execute();
+
+      if (operator.length === 0) {
+        throw new Error(`Operator with ID ${input.operator_id} not found`);
+      }
+
+      if (!operator[0].is_active) {
+        throw new Error(`Operator with ID ${input.operator_id} is inactive`);
+      }
+
+      // 4. Find and validate stock availability with optimistic locking
+      const stockRecord = await tx.select()
+        .from(stockTable)
+        .where(
+          and(
+            eq(stockTable.contractor_id, input.contractor_id),
+            eq(stockTable.jetty_id, input.jetty_id)
+          )
+        )
+        .execute();
+
+      if (stockRecord.length === 0) {
+        throw new Error(`No stock found for contractor ${input.contractor_id} at jetty ${input.jetty_id}`);
+      }
+
+      const currentStock = parseFloat(stockRecord[0].tonnage);
+      const bargingTonnage = input.tonnage;
+
+      if (bargingTonnage <= 0) {
+        throw new Error('Barging tonnage must be positive');
+      }
+
+      if (currentStock < bargingTonnage) {
+        throw new Error(`Insufficient stock. Available: ${currentStock} tons, Requested: ${bargingTonnage} tons`);
+      }
+
+      // 5. Insert barging record
+      const bargingResult = await tx.insert(bargingRecordsTable)
+        .values({
+          date_time: input.date_time,
+          contractor_id: input.contractor_id,
+          ship_batch_number: input.ship_batch_number,
+          tonnage: input.tonnage.toString(), // Convert number to string for numeric column
+          jetty_id: input.jetty_id,
+          buyer: input.buyer,
+          loading_document: input.loading_document,
+          operator_id: input.operator_id,
+          notes: input.notes
+        })
+        .returning()
+        .execute();
+
+      const createdRecord = bargingResult[0];
+
+      // 6. Update stock with optimistic locking
+      const newTonnage = currentStock - bargingTonnage;
+      const updatedStock = await tx.update(stockTable)
+        .set({
+          tonnage: newTonnage.toString(),
+          last_updated: new Date(),
+          version: sql`${stockTable.version} + 1`,
+          updated_at: new Date()
+        })
+        .where(
+          and(
+            eq(stockTable.id, stockRecord[0].id),
+            eq(stockTable.version, stockRecord[0].version) // Optimistic locking
+          )
+        )
+        .returning()
+        .execute();
+
+      if (updatedStock.length === 0) {
+        throw new Error('Stock was modified by another operation. Please try again.');
+      }
+
+      // Convert numeric fields back to numbers before returning
+      return {
+        ...createdRecord,
+        tonnage: parseFloat(createdRecord.tonnage)
+      };
+    });
+  } catch (error) {
+    console.error('Barging record creation failed:', error);
+    throw error;
+  }
 }
 
 export async function getBargingRecords(

@@ -1,78 +1,137 @@
+import { db } from '../db';
+import { jettiesTable } from '../db/schema';
+import { eq, asc } from 'drizzle-orm';
 import { 
   type CreateJettyInput, 
   type UpdateJettyInput, 
   type Jetty 
 } from '../schema';
 
-export async function createJetty(input: CreateJettyInput): Promise<Jetty> {
-  // This is a placeholder declaration! Real code should be implemented here.
-  // The goal of this handler is to create a new jetty record.
-  // It should:
-  // 1. Validate jetty code uniqueness
-  // 2. Insert new jetty into database
-  // 3. Log creation to audit log
-  // 4. Return created jetty data
-  
-  return Promise.resolve({
-    id: 1,
-    name: input.name,
-    code: input.code,
-    capacity: input.capacity,
-    is_active: true,
-    created_at: new Date(),
-    updated_at: new Date()
-  } as Jetty);
-}
+export const createJetty = async (input: CreateJettyInput): Promise<Jetty> => {
+  try {
+    // Insert jetty record
+    const result = await db.insert(jettiesTable)
+      .values({
+        name: input.name,
+        code: input.code,
+        capacity: input.capacity.toString(), // Convert number to string for numeric column
+        is_active: true
+      })
+      .returning()
+      .execute();
 
-export async function getJetties(): Promise<Jetty[]> {
-  // This is a placeholder declaration! Real code should be implemented here.
-  // The goal of this handler is to fetch all jetties.
-  // It should:
-  // 1. Query jetties table
-  // 2. Order by name or creation date
-  // 3. Include both active and inactive jetties with status indicator
-  // 4. Return jetty list
-  
-  return Promise.resolve([]);
-}
+    // Convert numeric fields back to numbers before returning
+    const jetty = result[0];
+    return {
+      ...jetty,
+      capacity: parseFloat(jetty.capacity) // Convert string back to number
+    };
+  } catch (error) {
+    console.error('Jetty creation failed:', error);
+    throw error;
+  }
+};
 
-export async function getActiveJetties(): Promise<Jetty[]> {
-  // This is a placeholder declaration! Real code should be implemented here.
-  // The goal of this handler is to fetch only active jetties.
-  // It should:
-  // 1. Query jetties table with is_active = true filter
-  // 2. Order by name
-  // 3. Return active jetty list
-  
-  return Promise.resolve([]);
-}
+export const getJetties = async (): Promise<Jetty[]> => {
+  try {
+    const results = await db.select()
+      .from(jettiesTable)
+      .orderBy(asc(jettiesTable.name))
+      .execute();
 
-export async function getJettyById(id: number): Promise<Jetty | null> {
-  // This is a placeholder declaration! Real code should be implemented here.
-  // The goal of this handler is to fetch a specific jetty by ID.
-  // It should:
-  // 1. Query jetty by ID
-  // 2. Return jetty data or null if not found
-  
-  return Promise.resolve(null);
-}
+    // Convert numeric fields back to numbers before returning
+    return results.map(jetty => ({
+      ...jetty,
+      capacity: parseFloat(jetty.capacity)
+    }));
+  } catch (error) {
+    console.error('Failed to fetch jetties:', error);
+    throw error;
+  }
+};
 
-export async function updateJetty(input: UpdateJettyInput): Promise<Jetty> {
-  // This is a placeholder declaration! Real code should be implemented here.
-  // The goal of this handler is to update jetty information.
-  // It should:
-  // 1. Validate jetty exists
-  // 2. Update jetty fields in database
-  // 3. Log changes to audit log
-  // 4. Return updated jetty data
-  
-  return Promise.resolve({
-    id: input.id,
-    name: input.name || 'Updated Jetty',
-    code: input.code || 'UPD',
-    capacity: input.capacity || 1000,
-    is_active: input.is_active ?? true,
-    created_at: new Date(),
-    updated_at: new Date()
-  } as Jetty);
-}
+export const getActiveJetties = async (): Promise<Jetty[]> => {
+  try {
+    const results = await db.select()
+      .from(jettiesTable)
+      .where(eq(jettiesTable.is_active, true))
+      .orderBy(asc(jettiesTable.name))
+      .execute();
+
+    // Convert numeric fields back to numbers before returning
+    return results.map(jetty => ({
+      ...jetty,
+      capacity: parseFloat(jetty.capacity)
+    }));
+  } catch (error) {
+    console.error('Failed to fetch active jetties:', error);
+    throw error;
+  }
+};
+
+export const getJettyById = async (id: number): Promise<Jetty | null> => {
+  try {
+    const results = await db.select()
+      .from(jettiesTable)
+      .where(eq(jettiesTable.id, id))
+      .execute();
+
+    if (results.length === 0) {
+      return null;
+    }
+
+    // Convert numeric fields back to numbers before returning
+    const jetty = results[0];
+    return {
+      ...jetty,
+      capacity: parseFloat(jetty.capacity)
+    };
+  } catch (error) {
+    console.error('Failed to fetch jetty by ID:', error);
+    throw error;
+  }
+};
+
+export const updateJetty = async (input: UpdateJettyInput): Promise<Jetty> => {
+  try {
+    // Check if jetty exists
+    const existing = await getJettyById(input.id);
+    if (!existing) {
+      throw new Error(`Jetty with id ${input.id} not found`);
+    }
+
+    // Build update values, converting numeric fields to strings
+    const updateValues: any = {
+      updated_at: new Date()
+    };
+
+    if (input.name !== undefined) {
+      updateValues.name = input.name;
+    }
+    if (input.code !== undefined) {
+      updateValues.code = input.code;
+    }
+    if (input.capacity !== undefined) {
+      updateValues.capacity = input.capacity.toString();
+    }
+    if (input.is_active !== undefined) {
+      updateValues.is_active = input.is_active;
+    }
+
+    const result = await db.update(jettiesTable)
+      .set(updateValues)
+      .where(eq(jettiesTable.id, input.id))
+      .returning()
+      .execute();
+
+    // Convert numeric fields back to numbers before returning
+    const jetty = result[0];
+    return {
+      ...jetty,
+      capacity: parseFloat(jetty.capacity)
+    };
+  } catch (error) {
+    console.error('Jetty update failed:', error);
+    throw error;
+  }
+};
